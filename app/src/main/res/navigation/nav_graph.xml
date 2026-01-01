@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<navigation xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:id="@+id/nav_graph"
+    app:startDestination="@id/entryListFragment">
+
+    <fragment
+        android:id="@+id/entryListFragment"
+        android:name="com.oxoghost.hexapass.ui.EntryListFragment"
+        android:label="Vault Entries" >
+        <action
+            android:id="@+id/action_entryList_to_entryDetail"
+            app:destination="@id/entryDetailFragment"
+            app:enterAnim="@android:anim/slide_in_left"
+            app:exitAnim="@android:anim/slide_out_right"
+            app:popEnterAnim="@android:anim/slide_in_left"
+            app:popExitAnim="@android:anim/slide_out_right" />
+        <action
+            android:id="@+id/action_entryList_to_createEntry"
+            app:destination="@id/entryDetailFragment"
+            app:enterAnim="@android:anim/slide_in_left"
+            app:exitAnim="@android:anim/slide_out_right"
+            app:popEnterAnim="@android:anim/slide_in_left"
+            app:popExitAnim="@android:anim/slide_out_right" />
+    </fragment>
+
+    <fragment
+        android:id="@+id/entryDetailFragment"
+        android:name="com.oxoghost.hexapass.ui.EntryDetailFragment"
+        android:label="Entry Details">
+        <argument
+            android:name="entryId"
+            app:argType="string"
+            app:nullable="true"
+            android:defaultValue="@null" />
+    </fragment>
+</navigation>
