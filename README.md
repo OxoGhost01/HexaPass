@@ -21,4 +21,21 @@ Security guarantees are not complete yet.
 - Clipboard leakage: time-limited only
 
 ## License
-TBD
+
+This project is **source-available but not open source**.
+
+You are allowed to:
+- View the code
+- Study it
+- Modify it for personal or educational purposes
+
+You are NOT allowed to:
+- Use it commercially
+- Monetize it
+- Publish it on app stores
+- Integrate it into revenue-generating products
+
+All commercial rights are reserved by the author.
+
+See the LICENSE file for full terms.
+
