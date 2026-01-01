@@ -14,5 +14,11 @@ Security guarantees are not complete yet.
 - Audit tools: not implemented
 - Security review: not done
 
+## Threat Model
+- Device compromise: NOT protected
+- Rooted device: NOT supported
+- Memory inspection: mitigated but not guaranteed
+- Clipboard leakage: time-limited only
+
 ## License
 TBD
