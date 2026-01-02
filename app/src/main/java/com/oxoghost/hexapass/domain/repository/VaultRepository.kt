@@ -11,6 +11,11 @@ interface VaultRepository {
         masterPassword: CharArray
     ): List<VaultEntry>
 
+    fun createVault(
+        vaultUri: Uri,
+        masterPassword: CharArray
+    ): Result<Unit>
+
     fun updateEntry(
         vaultUri: Uri,
         entryId: String,
@@ -27,6 +32,26 @@ interface VaultRepository {
     fun deleteEntry(
         vaultUri: Uri,
         entryId: String,
+        masterPassword: CharArray
+    ): Result<Unit>
+
+    fun addGroup(
+        vaultUri: Uri,
+        parentGroupId: String?,
+        name: String,
+        masterPassword: CharArray
+    ): Result<Unit>
+
+    fun deleteGroup(
+        vaultUri: Uri,
+        groupId: String,
+        masterPassword: CharArray
+    ): Result<Unit>
+
+    fun moveEntry(
+        vaultUri: Uri,
+        entryId: String,
+        targetGroupId: String,
         masterPassword: CharArray
     ): Result<Unit>
 

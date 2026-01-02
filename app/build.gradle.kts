@@ -46,11 +46,11 @@ dependencies {
     implementation(libs.androidx.constraintlayout)
 
     implementation("org.bouncycastle:bcprov-jdk15to18:1.83")
-    implementation("de.slackspace:openkeepass:0.8.2")
+    implementation("org.linguafranca.pwdb:KeePassJava2:2.2.1")
     implementation("com.google.android.material:material:1.12.0")
     implementation("androidx.navigation:navigation-fragment-ktx:2.7.0")
     implementation("androidx.navigation:navigation-ui-ktx:2.7.0")
-    implementation(libs.lifecycle.process)
+    implementation(libs.androidx.lifecycle.process)
 
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)

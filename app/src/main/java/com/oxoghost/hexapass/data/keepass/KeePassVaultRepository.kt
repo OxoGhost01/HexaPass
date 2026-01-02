@@ -5,10 +5,10 @@ import android.net.Uri
 import com.oxoghost.hexapass.domain.model.EntryDraft
 import com.oxoghost.hexapass.domain.model.VaultEntry
 import com.oxoghost.hexapass.domain.repository.VaultRepository
-import de.slackspace.openkeepass.KeePassDatabase
-import de.slackspace.openkeepass.domain.EntryBuilder
-import de.slackspace.openkeepass.domain.Group
-import de.slackspace.openkeepass.domain.KeePassFile
+import org.linguafranca.pwdb.kdbx.KdbxCreds
+import org.linguafranca.pwdb.kdbx.simple.SimpleDatabase
+import org.linguafranca.pwdb.kdbx.simple.SimpleEntry
+import org.linguafranca.pwdb.kdbx.simple.SimpleGroup
 import java.io.File
 import java.io.FileOutputStream
 import java.util.UUID
@@ -18,33 +18,60 @@ class KeePassVaultRepository(
     private val cacheDir: File
 ) : VaultRepository {
 
-    private var keepassFile: KeePassFile? = null
+    private var database: SimpleDatabase? = null
 
     override fun openVault(
         vaultUri: Uri,
         masterPassword: CharArray
     ): List<VaultEntry> {
-        contentResolver.openInputStream(vaultUri).use { inputStream ->
+        return contentResolver.openInputStream(vaultUri).use { inputStream ->
             requireNotNull(inputStream) { "Unable to open vault input stream" }
-            keepassFile = KeePassDatabase
-                .getInstance(inputStream)
-                .openDatabase(String(masterPassword))
+            val creds = KdbxCreds(String(masterPassword).toByteArray())
+            val db = SimpleDatabase.load(creds, inputStream)
+            database = db
+            getEntries()
+        }
+    }
 
-            return getEntries()
+    override fun createVault(
+        vaultUri: Uri,
+        masterPassword: CharArray
+    ): Result<Unit> {
+        return try {
+            val db = SimpleDatabase()
+            db.rootGroup.name = "Root"
+            
+            saveDatabase(vaultUri, db, masterPassword)
+            database = db
+            Result.success(Unit)
+        } catch (e: Exception) {
+            Result.failure(e)
+        } finally {
+            masterPassword.fill('\u0000')
         }
     }
 
     private fun getEntries(): List<VaultEntry> {
-        val file = keepassFile ?: return emptyList()
-        return collectEntries(file.root).map { entry ->
+        val db = database ?: return emptyList()
+        val allEntries = mutableListOf<SimpleEntry>()
+        collectEntriesRecursively(db.rootGroup, allEntries)
+        
+        return allEntries.map { entry ->
             VaultEntry(
                 id = entry.uuid.toString(),
                 title = entry.title ?: "",
-                username = entry.username,
+                username = entry.username ?: "",
                 urls = entry.url?.let { listOf(it) } ?: emptyList(),
-                notes = entry.notes,
+                notes = entry.notes ?: "",
                 passwordLength = entry.password?.length ?: 0
             )
+        }
+    }
+
+    private fun collectEntriesRecursively(group: SimpleGroup, result: MutableList<SimpleEntry>) {
+        result.addAll(group.entries)
+        for (subGroup in group.groups) {
+            collectEntriesRecursively(subGroup, result)
         }
     }
 
@@ -55,31 +82,23 @@ class KeePassVaultRepository(
         masterPassword: CharArray
     ): Result<Unit> {
         return try {
-            val passwordString = String(masterPassword)
+            val db = reloadDatabase(vaultUri, masterPassword)
+            val entry = findEntryById(db.rootGroup, UUID.fromString(entryId))
+                ?: throw Exception("Entry not found")
 
-            val currentFile = contentResolver.openInputStream(vaultUri).use { input ->
-                requireNotNull(input)
-                KeePassDatabase.getInstance(input).openDatabase(passwordString)
-            }
+            entry.title = draft.title
+            entry.username = draft.username ?: ""
+            entry.password = draft.password?.let { String(it) } ?: ""
+            entry.url = draft.url
+            entry.notes = draft.notes ?: ""
 
-            val uuid = UUID.fromString(entryId)
-            updateGroupRecursively(currentFile.root, uuid, draft)
-
-            val tempFile = File(cacheDir, "vault_temp.kdbx")
-            FileOutputStream(tempFile).use { fos ->
-                KeePassDatabase.write(currentFile, passwordString, fos)
-            }
-
-            contentResolver.openOutputStream(vaultUri, "wt")?.use { out ->
-                tempFile.inputStream().use { it.copyTo(out) }
-            } ?: error("Cannot open vault output stream")
-
-            tempFile.delete()
-            keepassFile = currentFile
-
+            saveDatabase(vaultUri, db, masterPassword)
+            database = db
             Result.success(Unit)
         } catch (e: Exception) {
             Result.failure(e)
+        } finally {
+            masterPassword.fill('\u0000')
         }
     }
 
@@ -89,46 +108,24 @@ class KeePassVaultRepository(
         masterPassword: CharArray
     ): Result<Unit> {
         return try {
-            val passwordString = String(masterPassword)
-
-            val currentFile = contentResolver.openInputStream(vaultUri).use { input ->
-                requireNotNull(input)
-                KeePassDatabase.getInstance(input).openDatabase(passwordString)
-            }
-
-            val newEntry = EntryBuilder(draft.title)
-                .username(draft.username)
-                .password(draft.password?.let { String(it) })
-                .url(draft.url)
-                .notes(draft.notes)
-                .build()
-
-            // Find the proper target group (prefer the first subgroup of root)
-            val root = currentFile.root
-            val targetGroup = if (root.groups.isNotEmpty()) root.groups[0] else root
-
-            // Add the entry using the same list modification pattern that works for updates
-            val updatedEntries = targetGroup.entries.toMutableList()
-            updatedEntries.add(newEntry)
+            val db = reloadDatabase(vaultUri, masterPassword)
             
-            targetGroup.entries.clear()
-            targetGroup.entries.addAll(updatedEntries)
+            val targetGroup = if (db.rootGroup.groups.isNotEmpty()) db.rootGroup.groups[0] else db.rootGroup
+            val entry = targetGroup.addEntry(db.newEntry())
+            
+            entry.title = draft.title
+            entry.username = draft.username ?: ""
+            entry.password = draft.password?.let { String(it) } ?: ""
+            entry.url = draft.url
+            entry.notes = draft.notes ?: ""
 
-            val tempFile = File(cacheDir, "vault_temp.kdbx")
-            FileOutputStream(tempFile).use { fos ->
-                KeePassDatabase.write(currentFile, passwordString, fos)
-            }
-
-            contentResolver.openOutputStream(vaultUri, "wt")?.use { out ->
-                tempFile.inputStream().use { it.copyTo(out) }
-            } ?: error("Cannot open vault output stream")
-
-            tempFile.delete()
-            keepassFile = currentFile
-
+            saveDatabase(vaultUri, db, masterPassword)
+            database = db
             Result.success(Unit)
         } catch (e: Exception) {
             Result.failure(e)
+        } finally {
+            masterPassword.fill('\u0000')
         }
     }
 
@@ -138,28 +135,15 @@ class KeePassVaultRepository(
         masterPassword: CharArray
     ): Result<Unit> {
         return try {
-            val passwordString = String(masterPassword)
-
-            val currentFile = contentResolver.openInputStream(vaultUri).use { input ->
-                requireNotNull(input)
-                KeePassDatabase.getInstance(input).openDatabase(passwordString)
-            }
-
+            val db = reloadDatabase(vaultUri, masterPassword)
             val uuid = UUID.fromString(entryId)
-            deleteEntryFromGroupRecursively(currentFile.root, uuid)
+            val entry = findEntryById(db.rootGroup, uuid)
+                ?: throw Exception("Entry not found")
 
-            val tempFile = File(cacheDir, "vault_temp.kdbx")
-            FileOutputStream(tempFile).use { fos ->
-                KeePassDatabase.write(currentFile, passwordString, fos)
-            }
+            entry.parent?.removeEntry(entry)
 
-            contentResolver.openOutputStream(vaultUri, "wt")?.use { out ->
-                tempFile.inputStream().use { it.copyTo(out) }
-            } ?: error("Cannot open vault output stream")
-
-            tempFile.delete()
-            keepassFile = currentFile
-
+            saveDatabase(vaultUri, db, masterPassword)
+            database = db
             Result.success(Unit)
         } catch (e: Exception) {
             Result.failure(e)
@@ -168,61 +152,139 @@ class KeePassVaultRepository(
         }
     }
 
-    private fun deleteEntryFromGroupRecursively(group: Group, uuid: UUID) {
-        val updatedEntries = group.entries.filter { it.uuid != uuid }
-        group.entries.clear()
-        group.entries.addAll(updatedEntries)
+    override fun addGroup(
+        vaultUri: Uri,
+        parentGroupId: String?,
+        name: String,
+        masterPassword: CharArray
+    ): Result<Unit> {
+        return try {
+            val db = reloadDatabase(vaultUri, masterPassword)
+            val parent = if (parentGroupId != null) {
+                findGroupById(db.rootGroup, UUID.fromString(parentGroupId))
+                    ?: throw Exception("Parent group not found")
+            } else {
+                db.rootGroup
+            }
 
-        group.groups.forEach { subGroup ->
-            deleteEntryFromGroupRecursively(subGroup, uuid)
+            if (parent.groups.any { it.name == name }) {
+                throw Exception("A group with this name already exists")
+            }
+
+            parent.addGroup(db.newGroup(name))
+
+            saveDatabase(vaultUri, db, masterPassword)
+            database = db
+            Result.success(Unit)
+        } catch (e: Exception) {
+            Result.failure(e)
+        } finally {
+            masterPassword.fill('\u0000')
         }
     }
 
-    private fun updateGroupRecursively(
-        group: Group,
-        uuid: UUID,
-        draft: EntryDraft
-    ) {
-        val updatedEntries = group.entries.map { entry ->
-            if (entry.uuid == uuid) {
-                EntryBuilder(entry)
-                    .title(draft.title)
-                    .username(draft.username)
-                    .password(draft.password?.let { String(it) })
-                    .url(draft.url)
-                    .notes(draft.notes)
-                    .build()
-            } else {
-                entry
+    override fun deleteGroup(
+        vaultUri: Uri,
+        groupId: String,
+        masterPassword: CharArray
+    ): Result<Unit> {
+        return try {
+            val db = reloadDatabase(vaultUri, masterPassword)
+            val uuid = UUID.fromString(groupId)
+            val group = findGroupById(db.rootGroup, uuid)
+                ?: throw Exception("Group not found")
+
+            if (group.isRootGroup) {
+                throw Exception("Cannot delete root group")
             }
+
+            group.parent?.removeGroup(group)
+
+            saveDatabase(vaultUri, db, masterPassword)
+            database = db
+            Result.success(Unit)
+        } catch (e: Exception) {
+            Result.failure(e)
+        } finally {
+            masterPassword.fill('\u0000')
+        }
+    }
+
+    override fun moveEntry(
+        vaultUri: Uri,
+        entryId: String,
+        targetGroupId: String,
+        masterPassword: CharArray
+    ): Result<Unit> {
+        return try {
+            val db = reloadDatabase(vaultUri, masterPassword)
+            val entry = findEntryById(db.rootGroup, UUID.fromString(entryId))
+                ?: throw Exception("Entry not found")
+            val targetGroup = findGroupById(db.rootGroup, UUID.fromString(targetGroupId))
+                ?: throw Exception("Target group not found")
+
+            targetGroup.addEntry(entry)
+
+            saveDatabase(vaultUri, db, masterPassword)
+            database = db
+            Result.success(Unit)
+        } catch (e: Exception) {
+            Result.failure(e)
+        } finally {
+            masterPassword.fill('\u0000')
+        }
+    }
+
+    private fun reloadDatabase(vaultUri: Uri, masterPassword: CharArray): SimpleDatabase {
+        return contentResolver.openInputStream(vaultUri).use { inputStream ->
+            requireNotNull(inputStream)
+            val creds = KdbxCreds(String(masterPassword).toByteArray())
+            SimpleDatabase.load(creds, inputStream)
+        }
+    }
+
+    private fun saveDatabase(vaultUri: Uri, db: SimpleDatabase, masterPassword: CharArray) {
+        val creds = KdbxCreds(String(masterPassword).toByteArray())
+        val tempFile = File(cacheDir, "vault_temp.kdbx")
+        FileOutputStream(tempFile).use { fos ->
+            db.save(creds, fos)
         }
 
-        group.entries.clear()
-        group.entries.addAll(updatedEntries)
+        contentResolver.openOutputStream(vaultUri, "wt")?.use { out ->
+            tempFile.inputStream().use { it.copyTo(out) }
+        } ?: throw Exception("Cannot open vault output stream")
+        
+        tempFile.delete()
+    }
 
-        group.groups.forEach { subGroup ->
-            updateGroupRecursively(subGroup, uuid, draft)
+    private fun findEntryById(group: SimpleGroup, uuid: UUID): SimpleEntry? {
+        for (entry in group.entries) {
+            if (entry.uuid == uuid) return entry
         }
+        for (subGroup in group.groups) {
+            val found = findEntryById(subGroup, uuid)
+            if (found != null) return found
+        }
+        return null
+    }
+
+    private fun findGroupById(group: SimpleGroup, uuid: UUID): SimpleGroup? {
+        if (group.uuid == uuid) return group
+        for (subGroup in group.groups) {
+            val found = findGroupById(subGroup, uuid)
+            if (found != null) return found
+        }
+        return null
     }
 
     override fun getPassword(entryId: String): CharArray? {
-        val file = keepassFile ?: return null
-        val entry = collectEntries(file.root)
-            .firstOrNull { it.uuid.toString() == entryId }
+        val db = database ?: return null
+        val entry = findEntryById(db.rootGroup, UUID.fromString(entryId))
             ?: return null
         return entry.password?.toCharArray()
     }
 
-    private fun collectEntries(group: Group): List<de.slackspace.openkeepass.domain.Entry> {
-        val result = mutableListOf<de.slackspace.openkeepass.domain.Entry>()
-        result.addAll(group.entries)
-        for (subGroup in group.groups) {
-            result.addAll(collectEntries(subGroup))
-        }
-        return result
-    }
-
     override fun clearSensitiveData() {
-        keepassFile = null
+        database = null
     }
 }
